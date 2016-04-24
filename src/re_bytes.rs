@@ -21,7 +21,7 @@ use memchr::memchr;
 use exec::{Exec, ExecNoSync, ExecBuilder};
 use expand::expand;
 use error::Error;
-use re_trait::{self, RegularExpression};
+use re_trait::{self, RegularExpression, Slot};
 
 pub use set::RegexSetBytes as RegexSet;
 pub use set::SetMatchesBytes as SetMatches;
@@ -116,7 +116,18 @@ impl Regex {
     /// # }
     /// ```
     pub fn is_match(&self, text: &[u8]) -> bool {
-        self.shortest_match(text).is_some()
+        self.is_match_at(text, 0)
+    }
+
+    /// Returns the same as is_match, but starts the search at the given
+    /// offset.
+    ///
+    /// The significance of the starting point is that it takes the surrounding
+    /// context into consideration. For example, the `\A` anchor can only
+    /// match when `start == 0`.
+    #[doc(hidden)]
+    pub fn is_match_at(&self, text: &[u8], start: usize) -> bool {
+        self.shortest_match_at(text, start).is_some()
     }
 
     /// Returns the start and end byte range of the leftmost-first match in
@@ -140,7 +151,22 @@ impl Regex {
     /// # }
     /// ```
     pub fn find(&self, text: &[u8]) -> Option<(usize, usize)> {
-        self.0.searcher().find_at(text, 0)
+        self.find_at(text, 0)
+    }
+
+    /// Returns the same as find, but starts the search at the given
+    /// offset.
+    ///
+    /// The significance of the starting point is that it takes the surrounding
+    /// context into consideration. For example, the `\A` anchor can only
+    /// match when `start == 0`.
+    #[doc(hidden)]
+    pub fn find_at(
+        &self,
+        text: &[u8],
+        start: usize,
+    ) -> Option<(usize, usize)> {
+        self.0.searcher().find_at(text, start)
     }
 
     /// Returns an iterator for each successive non-overlapping match in
@@ -235,12 +261,27 @@ impl Regex {
     /// accessed with `at(0)` or `[0]`.
     pub fn captures<'t>(&self, text: &'t [u8]) -> Option<Captures<'t>> {
         let mut slots = vec![None; 2 * self.captures_len()];
-        self.0.searcher().captures_at(&mut slots, text, 0)
-            .map(|_| Captures {
-                text: text,
-                slots: slots,
-                named_groups: self.0.capture_name_idx().clone(),
-            })
+        self.read_captures_at(&mut slots, text, 0).map(|_| Captures {
+            text: text,
+            slots: slots,
+            named_groups: self.0.capture_name_idx().clone(),
+        })
+    }
+
+    /// Returns the same as captures, but starts the search at the given
+    /// offset and populates the capture locations given.
+    ///
+    /// The significance of the starting point is that it takes the surrounding
+    /// context into consideration. For example, the `\A` anchor can only
+    /// match when `start == 0`.
+    #[doc(hidden)]
+    pub fn read_captures_at(
+        &self,
+        slots: &mut [Slot],
+        text: &[u8],
+        start: usize,
+    ) -> Option<(usize, usize)> {
+        self.0.searcher().read_captures_at(slots, text, start)
     }
 
     /// Returns an iterator over all the non-overlapping capture groups matched
@@ -493,7 +534,22 @@ impl Regex {
     /// # }
     /// ```
     pub fn shortest_match(&self, text: &[u8]) -> Option<usize> {
-        self.0.searcher().shortest_match_at(text, 0)
+        self.shortest_match_at(text, 0)
+    }
+
+    /// Returns the same as shortest_match, but starts the search at the given
+    /// offset.
+    ///
+    /// The significance of the starting point is that it takes the surrounding
+    /// context into consideration. For example, the `\A` anchor can only
+    /// match when `start == 0`.
+    #[doc(hidden)]
+    pub fn shortest_match_at(
+        &self,
+        text: &[u8],
+        start: usize,
+    ) -> Option<usize> {
+        self.0.searcher().shortest_match_at(text, start)
     }
 
     /// Returns the original string of this regex.

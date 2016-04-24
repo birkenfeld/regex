@@ -253,7 +253,10 @@ impl<'c> RegularExpression for ExecNoSyncStr<'c> {
     fn slots_len(&self) -> usize { self.0.slots_len() }
 
     fn next_after_empty(&self, text: &str, i: usize) -> usize {
-        let b = text.as_bytes()[i];
+        let b = match text.as_bytes().get(i) {
+            None => return text.len() + 1,
+            Some(&b) => b,
+        };
         let inc = if b <= 0x7F {
             1
         } else if b <= 0b110_11111 {
@@ -282,13 +285,13 @@ impl<'c> RegularExpression for ExecNoSyncStr<'c> {
     }
 
     #[inline(always)] // reduces constant overhead
-    fn captures_at(
+    fn read_captures_at(
         &self,
         slots: &mut [Slot],
         text: &str,
         start: usize,
     ) -> Option<(usize, usize)> {
-        self.0.captures_at(slots, text.as_bytes(), start)
+        self.0.read_captures_at(slots, text.as_bytes(), start)
     }
 }
 
@@ -422,7 +425,7 @@ impl<'c> RegularExpression for ExecNoSync<'c> {
     ///
     /// Note that the first two slots always correspond to the start and end
     /// locations of the overall match.
-    fn captures_at(
+    fn read_captures_at(
         &self,
         slots: &mut [Slot],
         text: &[u8],

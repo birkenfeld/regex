@@ -1,0 +1,9 @@
+#!/bin/sh
+
+set -e
+
+cargo build --manifest-path ../Cargo.toml
+gcc -o test test.c \
+  -DDEBUG \
+  -Wall -I../include -L../target/debug \
+  -lutil -ldl -lpthread -lgcc_s -lc -lm -lrt -lutil -lrure

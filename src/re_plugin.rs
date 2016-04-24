@@ -54,10 +54,10 @@ impl RegularExpression for Plugin {
 
     fn find_at(&self, text: &str, start: usize) -> Option<(usize, usize)> {
         let mut slots = [None, None];
-        self.captures_at(&mut slots, text, start)
+        self.read_captures_at(&mut slots, text, start)
     }
 
-    fn captures_at<'t>(
+    fn read_captures_at<'t>(
         &self,
         slots: &mut [Slot],
         text: &'t str,
