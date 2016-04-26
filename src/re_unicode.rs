@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use syntax;
 
-use exec::{Exec, ExecNoSyncStr, ExecBuilder};
 use error::Error;
+use exec::{Exec, ExecNoSyncStr};
+use re_builder::unicode::RegexBuilder;
 use re_plugin::Plugin;
 use re_trait::{self, RegularExpression, Slot};
 
@@ -169,7 +170,7 @@ impl Regex {
     /// If the data structure exceeds the size given, then an error is
     /// returned.
     pub fn with_size_limit(size: usize, re: &str) -> Result<Regex, Error> {
-        ExecBuilder::new(re).size_limit(size).build().map(Regex::from)
+        RegexBuilder::new(re).size_limit(size).compile()
     }
 
     /// Returns true if and only if the regex matches the string given.

@@ -1,12 +1,14 @@
-// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+/*
+ * Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
+ * file at the top-level directory of this distribution and at
+ * http://rust-lang.org/COPYRIGHT.
+ *
+ * Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+ * http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+ * <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+ * option. This file may not be copied, modified, or distributed
+ * except according to those terms.
+*/
 
 #ifndef _RURE_H
 #define _RURE_H
@@ -18,62 +20,376 @@
 extern "C" {
 #endif
 
+/*
+ * rure is the type of a compiled regular expression.
+ *
+ * A rure can be safely used from multiple threads simultaneously.
+ */
 typedef struct rure rure;
 
+/*
+ * rure_options is the set of non-flag configuration options for compiling
+ * a regular expression. Currently, only two options are available: setting
+ * the size limit of the compiled program and setting the size limit of the
+ * cache of states that the DFA uses while searching.
+ *
+ * For most uses, the default settings will work fine, and NULL can be passed
+ * wherever a *rure_options is expected.
+*/
 typedef struct rure_options rure_options;
 
-typedef struct rure_error rure_error;
+/*
+ * The flags listed below can be used in rure_compile to set the default
+ * flags. All flags can otherwise be togged in the expression itself using
+ * standard syntax, e.g., `(?i)` turns case insensitive matching on and `(?-i)`
+ * disables it.
+ */
+/* The case insensitive (i) flag. */
+#define RURE_FLAG_CASEI 1 << 0
+/* The multi-line matching (m) flag. (^ and $ match new line boundaries.) */
+#define RURE_FLAG_MULTI 1 << 1
+/* The any character (s) flag. (. matches new line.) */
+#define RURE_FLAG_DOTNL 1 << 2
+/* The greedy swap (U) flag. (e.g., + is ungreedy and +? is greedy.) */
+#define RURE_FLAG_SWAP_GREED 1 << 3
+/* The ignore whitespace (x) flag. */
+#define RURE_FLAG_SPACE 1 << 4
+/* The Unicode (u) flag. */
+#define RURE_FLAG_UNICODE 1 << 5
+/* The default set of flags enabled when no flags are set. */
+#define RURE_DEFAULT_FLAGS RURE_FLAG_UNICODE
 
-rure_error *rure_error_new();
-
-void rure_error_free(rure_error *err);
-
-const char *rure_error_message(rure_error *err);
-
+/*
+ * rure_match corresponds to the location of a single match in a haystack.
+ */
 typedef struct rure_match {
+    /* The start position. */
     size_t start;
+    /* The end position. */
     size_t end;
 } rure_match;
 
+/*
+ * rure_captures represents storage for sub-capture locations of a match.
+ *
+ * Computing the capture groups of a match can carry a significant performance
+ * penalty, so their use in the API is optional.
+ *
+ * A rure_captures value can be reused in multiple calls to rure_find_captures,
+ * so long as it is used with the compiled regular expression that created
+ * it.
+ *
+ * A rure_captures value is not safe to be used from multiple threads
+ * simultaneously.
+ *
+ * A rure_captures value may outlive its corresponding rure and can be freed
+ * independently.
+ */
 typedef struct rure_captures rure_captures;
 
-rure_captures *rure_captures_new(rure *re);
+/*
+ * rure_iter is an iterator over successive non-overlapping matches in a
+ * particular haystack.
+ *
+ * A rure_iter value is not safe to be used from multiple threads
+ * simultaneously.
+ *
+ * A rure_iter value may not outlive its corresponding rure and should be freed
+ * before its corresponding rure is freed.
+ */
+typedef struct rure_iter rure_iter;
 
-void rure_captures_free(rure_captures *captures);
+/*
+ * rure_error is an error that caused compilation to fail.
+ *
+ * Most errors are syntax errors but an error can be returned if the compiled
+ * regular expression would be too big.
+ *
+ * Whenever a function accepts an *rure_error, it is safe to pass NULL. (But
+ * you will not get access to the error if one occurred.)
+ */
+typedef struct rure_error rure_error;
 
-bool rure_captures_at(rure_captures *captures, size_t i, rure_match *match);
-
-size_t rure_captures_len(rure_captures *captures);
-
-rure *rure_compile(const char *pattern, rure_error *error);
-
+/*
+ * rure_compile_must compiles the given pattern into a regular expression. If
+ * compilation fails for any reason, an error message is printed to stderr and
+ * the process is aborted with status 1.
+ *
+ * The pattern given should be in UTF-8. For convenience, this accepts a C
+ * string, which means the pattern cannot usefully contain NUL. If your pattern
+ * may contain NUL, consider using a regular expression escape sequence, or
+ * just use rure_compile.
+ *
+ * This uses RURE_DEFAULT_FLAGS.
+ *
+ * The compiled expression returned may be used from multiple threads
+ * simultaneously.
+ */
 rure *rure_compile_must(const char *pattern);
 
-rure *rure_compile_options(const uint8_t *pattern, size_t length,
-                           rure_options *options, rure_error *error);
+/*
+ * rure_compile compiles the given pattern into a regular expression. The
+ * pattern must be valid UTF-8 and the length corresponds to the number of
+ * bytes in the pattern.
+ *
+ * flags is a bitfield. Valid values are constants declared with prefix
+ * RURE_FLAG_.
+ *
+ * options contains non-flag configuration settings. If it's NULL, default
+ * settings are used. options may be freed immediately after a call to
+ * rure_compile.
+ *
+ * error is set if there was a problem compiling the pattern (including if the
+ * pattern is not valid UTF-8). If error is NULL, then no error information
+ * is returned. In all cases, if an error occurs, NULL is returned.
+ *
+ * The compiled expression returned may be used from multiple threads
+ * simultaneously.
+ */
+rure *rure_compile(const uint8_t *pattern, size_t length,
+                   uint32_t flags, rure_options *options,
+                   rure_error *error);
 
+/*
+ * rure_free frees the given compiled regular expression.
+ *
+ * This must be called at most once.
+ */
 void rure_free(rure *re);
 
-int32_t rure_capture_name_index(rure *re, const char *name);
-
+/*
+ * rure_is_match returns true if and only if re matches anywhere in haystack.
+ *
+ * haystack may contain arbitrary bytes, but ASCII compatible text is more
+ * useful. UTF-8 is even more useful. Other text encodings aren't supported.
+ * length should be the number of bytes in haystack.
+ *
+ * start is the position at which to start searching.
+ *
+ * rure_is_match should be preferred to rure_find since it may be faster.
+ *
+ * N.B. The performance of this search is not impacted by the presence of
+ * capturing groups in your regular expression.
+ */
 bool rure_is_match(rure *re, const uint8_t *haystack, size_t length,
                    size_t start);
 
+/*
+ * rure_find returns true if and only if re matches anywhere in haystack.
+ * If a match is found, then its start and end offsets (in bytes) are set
+ * on the match pointer given.
+ *
+ * haystack may contain arbitrary bytes, but ASCII compatible text is more
+ * useful. UTF-8 is even more useful. Other text encodings aren't supported.
+ * length should be the number of bytes in haystack.
+ *
+ * start is the position at which to start searching.
+ *
+ * rure_find should be preferred to rure_find_captures since it may be faster.
+ *
+ * N.B. The performance of this search is not impacted by the presence of
+ * capturing groups in your regular expression.
+ */
 bool rure_find(rure *re, const uint8_t *haystack, size_t length,
                size_t start, rure_match *match);
 
+/*
+ * rure_find_captures returns true if and only if re matches anywhere in
+ * haystack. If a match is found, then all of its capture locations are stored
+ * in the captures pointer given.
+ *
+ * haystack may contain arbitrary bytes, but ASCII compatible text is more
+ * useful. UTF-8 is even more useful. Other text encodings aren't supported.
+ * length should be the number of bytes in haystack.
+ *
+ * start is the position at which to start searching.
+ *
+ * Only use this function if you specifically need access to capture locations.
+ * It is not necessary to use this function just because your regular
+ * expression contains capturing groups.
+ *
+ * Capture locations can be accessed using the rure_captures_* functions.
+ *
+ * N.B. The performance of this search can be impacted by the number of
+ * capturing groups. If you're using this function, it may be beneficial to
+ * use non-capturing groups (e.g., `(?:re)`) where possible.
+ */
 bool rure_find_captures(rure *re, const uint8_t *haystack, size_t length,
                         size_t start, rure_captures *captures);
 
-typedef struct rure_iter rure_iter;
+/*
+ * rure_capture_name_index returns the capture index for the name given. If
+ * no such named capturing group exists in re, then -1 is returned.
+ *
+ * The capture index may be used with rure_captures_at.
+ *
+ * This function never returns 0 since the first capture group always
+ * corresponds to the entire match and is always unnamed.
+ */
+int32_t rure_capture_name_index(rure *re, const char *name);
 
+/*
+ * rure_iter_new creates a new iterator.
+ *
+ * An iterator will report all successive non-overlapping matches of re in
+ * haystack.
+ *
+ * haystack may contain arbitrary bytes, but ASCII compatible text is more
+ * useful. UTF-8 is even more useful. Other text encodings aren't supported.
+ * length should be the number of bytes in haystack.
+ */
 rure_iter *rure_iter_new(rure *re, const uint8_t *haystack, size_t length);
 
+/*
+ * rure_iter_free frees the iterator given.
+ *
+ * It must be called at most once.
+ */
 void rure_iter_free(rure_iter *it);
 
+/*
+ * rure_iter_next advances the iterator and returns true if and only if a
+ * match was found. If a match is found, then the match pointer is set with the
+ * start and end location of the match, in bytes.
+ *
+ * If no match is found, then subsequent calls will return false indefinitely.
+ *
+ * rure_iter_next should be preferred to rure_iter_next_captures since it may
+ * be faster.
+ *
+ * N.B. The performance of this search is not impacted by the presence of
+ * capturing groups in your regular expression.
+ */
 bool rure_iter_next(rure_iter *it, rure_match *match);
 
+/*
+ * rure_iter_next advances the iterator and returns true if and only if a
+ * match was found. If a match is found, then all of its capture locations are
+ * stored in the captures pointer given.
+ *
+ * If no match is found, then subsequent calls will return false indefinitely.
+ *
+ * Only use this function if you specifically need access to capture locations.
+ * It is not necessary to use this function just because your regular
+ * expression contains capturing groups.
+ *
+ * Capture locations can be accessed using the rure_captures_* functions.
+ *
+ * N.B. The performance of this search can be impacted by the number of
+ * capturing groups. If you're using this function, it may be beneficial to
+ * use non-capturing groups (e.g., `(?:re)`) where possible.
+ */
 bool rure_iter_next_captures(rure_iter *it, rure_captures *captures);
+
+/*
+ * rure_captures_new allocates storage for all capturing groups in re.
+ *
+ * A rure_captures value may be reused on subsequent calls to
+ * rure_find_captures or rure_iter_next_captures.
+ *
+ * A rure_captures value may be freed independently of re, although any
+ * particular rure_captures should be used only with the re given here.
+ *
+ * It is not safe to use a rure_captures value from multiple threads
+ * simultaneously.
+ */
+rure_captures *rure_captures_new(rure *re);
+
+/*
+ * rure_captures_free frees the given captures.
+ *
+ * This must be called at most once.
+ */
+void rure_captures_free(rure_captures *captures);
+
+/*
+ * rure_captures_at returns true if and only if the capturing group at the
+ * index given was part of a match. If so, the given match pointer is populated
+ * with the start and end location (in bytes) of the capturing group.
+ *
+ * If no capture group with the index i exists, then false is returned. (A
+ * capturing exists if and only if i is less than rure_captures_len(captures).)
+ */
+bool rure_captures_at(rure_captures *captures, size_t i, rure_match *match);
+
+/*
+ * rure_captures_len returns the number of capturing groups in the given
+ * captures.
+ */
+size_t rure_captures_len(rure_captures *captures);
+
+/*
+ * rure_options_new allocates space for options.
+ *
+ * Options may be freed immediately after a call to rure_compile, but otherwise
+ * may be freely used in multiple calls to rure_compile.
+ *
+ * It is not safe to set options from multiple threads simultaneously. It is
+ * safe to call rure_compile from multiple threads simultaneously using the
+ * same options pointer.
+ */
+rure_options *rure_options_new();
+
+/*
+ * rure_options_free frees the given options.
+ *
+ * This must be called at most once.
+ */
+void rure_options_free(rure_options *options);
+
+/*
+ * rure_options_size_limit sets the appoximate size limit of the compiled
+ * regular expression.
+ *
+ * This size limit roughly corresponds to the number of bytes occupied by a
+ * single compiled program. If the program would exceed this number, then a
+ * compilation error will be returned from rure_compile.
+ */
+void rure_options_size_limit(rure_options *options, size_t limit);
+
+/*
+ * rure_options_dfa_size_limit sets the approximate size of the cache used by
+ * the DFA during search.
+ *
+ * This roughly corresponds to the number of bytes that the DFA will use while
+ * searching.
+ *
+ * Note that this is a *per thread* limit. There is no way to set a global
+ * limit. In particular, if a regular expression is used from multiple threads
+ * simultaneously, then each thread may use up to the number of bytes
+ * specified here.
+ */
+void rure_options_dfa_size_limit(rure_options *options, size_t limit);
+
+/*
+ * rure_error_new allocates space for an error.
+ *
+ * If error information is desired, then rure_error_new should be called to
+ * create a rure_error pointer, and that pointer can be passed to rure_compile.
+ * If an error occurred, then rure_compile will return NULL and the error
+ * pointer will be set. A message can then be extracted.
+ *
+ * It is not safe to use errors from multiple threads simultaneously. An error
+ * value may be reused on subsequent calls to rure_compile.
+ */
+rure_error *rure_error_new();
+
+/*
+ * rure_error_free frees the error given.
+ *
+ * This must be called at most once.
+ */
+void rure_error_free(rure_error *err);
+
+/*
+ * rure_error_message returns a NUL terminated string that describes the error
+ * message.
+ *
+ * The pointer returned must not be freed. Instead, it will be freed when
+ * rure_error_free is called. If err is used in subsequent calls to
+ * rure_compile, then this pointer may change or become invalid.
+ */
+const char *rure_error_message(rure_error *err);
 
 #ifdef __cplusplus
 }

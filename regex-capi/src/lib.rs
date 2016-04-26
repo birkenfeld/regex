@@ -1,5 +1,3 @@
-#![allow(dead_code, unused_variables)]
-
 extern crate libc;
 extern crate regex;
 
@@ -13,10 +11,52 @@ use std::ptr;
 use std::slice;
 use std::str;
 
-use libc::c_char;
+use libc::{c_char, uint32_t};
 use regex::bytes;
 
-pub struct Options(());
+pub struct Regex {
+    re: bytes::Regex,
+    capture_names: HashMap<String, i32>,
+}
+
+pub struct Options {
+    size_limit: usize,
+    dfa_size_limit: usize,
+}
+
+#[repr(C)]
+pub enum rure_flag {
+    CaseInsensitive = 1 << 0,
+    MultiLine = 1 << 1,
+    DotMatchesNewLine = 1 << 2,
+    SwapGreed = 1 << 3,
+    IgnoreWhitespace = 1 << 4,
+    Unicode = 1 << 5,
+}
+
+const RURE_FLAG_CASEI: uint32_t = 1 << 0;
+const RURE_FLAG_MULTI: uint32_t = 1 << 1;
+const RURE_FLAG_DOTNL: uint32_t = 1 << 2;
+const RURE_FLAG_SWAP_GREED: uint32_t = 1 << 3;
+const RURE_FLAG_SPACE: uint32_t = 1 << 4;
+const RURE_FLAG_UNICODE: uint32_t = 1 << 5;
+const RURE_DEFAULT_FLAGS: uint32_t = RURE_FLAG_UNICODE;
+
+#[repr(C)]
+pub struct rure_match {
+    pub start: usize,
+    pub end: usize,
+}
+
+pub struct Captures(Vec<Option<usize>>);
+
+pub struct Iter {
+    re: *const Regex,
+    haystack: *const u8,
+    len: usize,
+    last_end: usize,
+    last_match: Option<usize>,
+}
 
 #[derive(Debug)]
 pub struct Error {
@@ -29,6 +69,20 @@ enum ErrorKind {
     None,
     Str(str::Utf8Error),
     Regex(regex::Error),
+}
+
+impl Deref for Regex {
+    type Target = bytes::Regex;
+    fn deref(&self) -> &bytes::Regex { &self.re }
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            size_limit: 10 * (1<<20),
+            dfa_size_limit: 2 * (1<<20),
+        }
+    }
 }
 
 impl Error {
@@ -58,106 +112,13 @@ impl fmt::Display for Error {
 }
 
 #[no_mangle]
-pub extern fn rure_error_new() -> *mut Error {
-    Box::into_raw(Box::new(Error::new(ErrorKind::None)))
-}
-
-#[no_mangle]
-pub extern fn rure_error_free(err: *const Error) {
-    unsafe { Box::from_raw(err as *mut Error); }
-}
-
-#[no_mangle]
-pub extern fn rure_error_message(err: *mut Error) -> *const c_char {
-    let err = unsafe { &mut *err };
-    let cmsg = match CString::new(format!("{}", err)) {
-        Ok(msg) => msg,
-        Err(err) => {
-            // I guess this can probably happen if the regex itself has a NUL,
-            // and that NUL re-occurs in the context presented by the error
-            // message. In this case, just show as much as we can.
-            let nul = err.nul_position();
-            let msg = err.into_vec();
-            CString::new(msg[0..nul].to_owned()).unwrap()
-        }
-    };
-    let p = cmsg.as_ptr();
-    err.message = Some(cmsg);
-    p
-}
-
-#[repr(C)]
-pub struct rure_match {
-    pub start: usize,
-    pub end: usize,
-}
-
-pub struct Captures(Vec<Option<usize>>);
-
-#[no_mangle]
-pub extern fn rure_captures_new(re: *const Regex) -> *mut Captures {
-    let re = unsafe { &*re };
-    let captures = Captures(vec![None; 2 * re.captures_len()]);
-    Box::into_raw(Box::new(captures))
-}
-
-#[no_mangle]
-pub extern fn rure_captures_free(captures: *const Captures) {
-    unsafe { Box::from_raw(captures as *mut Captures); }
-}
-
-#[no_mangle]
-pub extern fn rure_captures_at(
-    captures: *const Captures,
-    i: usize,
-    match_info: *mut rure_match,
-) -> bool {
-    let captures = unsafe { &(*captures).0 };
-    match (captures[i * 2], captures[i * 2 + 1]) {
-        (Some(start), Some(end)) => {
-            if !match_info.is_null() {
-                unsafe {
-                    (*match_info).start = start;
-                    (*match_info).end = end;
-                }
-            }
-            true
-        }
-        _ => false
-    }
-}
-
-#[no_mangle]
-pub extern fn rure_captures_len(captures: *const Captures) -> usize {
-    unsafe { (*captures).0.len() / 2 }
-}
-
-pub struct Regex {
-    re: bytes::Regex,
-    capture_names: HashMap<String, i32>,
-}
-
-impl Deref for Regex {
-    type Target = bytes::Regex;
-    fn deref(&self) -> &bytes::Regex { &self.re }
-}
-
-#[no_mangle]
-pub extern fn rure_compile(
-    pattern: *const c_char,
-    error: *mut Error,
-) -> *const Regex {
-    let len = unsafe { CStr::from_ptr(pattern).to_bytes().len() };
-    let pat = pattern as *const u8;
-    rure_compile_options(pat, len, ptr::null(), error)
-}
-
-#[no_mangle]
 pub extern fn rure_compile_must(
     pattern: *const c_char,
 ) -> *const Regex {
+    let len = unsafe { CStr::from_ptr(pattern).to_bytes().len() };
+    let pat = pattern as *const u8;
     let mut err = Error::new(ErrorKind::None);
-    let re = rure_compile(pattern, &mut err);
+    let re = rure_compile(pat, len, RURE_DEFAULT_FLAGS, ptr::null(), &mut err);
     if err.is_err() {
         let _ = writeln!(&mut io::stderr(), "{}", err);
         let _ = writeln!(&mut io::stderr(), "aborting from rure_compile_must");
@@ -167,9 +128,10 @@ pub extern fn rure_compile_must(
 }
 
 #[no_mangle]
-pub extern fn rure_compile_options(
+pub extern fn rure_compile(
     pattern: *const u8,
     length: usize,
+    flags: uint32_t,
     options: *const Options,
     error: *mut Error,
 ) -> *const Regex {
@@ -185,7 +147,19 @@ pub extern fn rure_compile_options(
             }
         }
     };
-    match bytes::Regex::new(pat) {
+    let mut builder = bytes::RegexBuilder::new(pat);
+    if !options.is_null() {
+        let options = unsafe { &*options };
+        builder = builder.size_limit(options.size_limit);
+        builder = builder.dfa_size_limit(options.dfa_size_limit);
+    }
+    builder = builder.case_insensitive(flags & RURE_FLAG_CASEI > 0);
+    builder = builder.multi_line(flags & RURE_FLAG_MULTI > 0);
+    builder = builder.dot_matches_new_line(flags & RURE_FLAG_DOTNL > 0);
+    builder = builder.swap_greed(flags & RURE_FLAG_SWAP_GREED > 0);
+    builder = builder.ignore_whitespace(flags & RURE_FLAG_SPACE > 0);
+    builder = builder.unicode(flags & RURE_FLAG_UNICODE > 0);
+    match builder.compile() {
         Ok(re) => {
             let mut capture_names = HashMap::new();
             for (i, name) in re.capture_names().enumerate() {
@@ -213,20 +187,6 @@ pub extern fn rure_compile_options(
 #[no_mangle]
 pub extern fn rure_free(re: *const Regex) {
     unsafe { Box::from_raw(re as *mut Regex); }
-}
-
-#[no_mangle]
-pub extern fn rure_capture_name_index(
-    re: *const Regex,
-    name: *const c_char,
-) -> i32 {
-    let re = unsafe { &*re };
-    let name = unsafe { CStr::from_ptr(name) };
-    let name = match name.to_str() {
-        Err(_) => return -1,
-        Ok(name) => name,
-    };
-    re.capture_names.get(name).map(|&i|i).unwrap_or(-1)
 }
 
 #[no_mangle]
@@ -273,12 +233,18 @@ pub extern fn rure_find_captures(
     re.read_captures_at(slots, haystack, start).is_some()
 }
 
-pub struct Iter {
+#[no_mangle]
+pub extern fn rure_capture_name_index(
     re: *const Regex,
-    haystack: *const u8,
-    len: usize,
-    last_end: usize,
-    last_match: Option<usize>,
+    name: *const c_char,
+) -> i32 {
+    let re = unsafe { &*re };
+    let name = unsafe { CStr::from_ptr(name) };
+    let name = match name.to_str() {
+        Err(_) => return -1,
+        Ok(name) => name,
+    };
+    re.capture_names.get(name).map(|&i|i).unwrap_or(-1)
 }
 
 #[no_mangle]
@@ -370,4 +336,99 @@ pub extern fn rure_iter_next_captures(
     }
     it.last_match = Some(e);
     true
+}
+
+#[no_mangle]
+pub extern fn rure_captures_new(re: *const Regex) -> *mut Captures {
+    let re = unsafe { &*re };
+    let captures = Captures(vec![None; 2 * re.captures_len()]);
+    Box::into_raw(Box::new(captures))
+}
+
+#[no_mangle]
+pub extern fn rure_captures_free(captures: *const Captures) {
+    unsafe { Box::from_raw(captures as *mut Captures); }
+}
+
+#[no_mangle]
+pub extern fn rure_captures_at(
+    captures: *const Captures,
+    i: usize,
+    match_info: *mut rure_match,
+) -> bool {
+    let captures = unsafe { &(*captures).0 };
+    match (captures[i * 2], captures[i * 2 + 1]) {
+        (Some(start), Some(end)) => {
+            if !match_info.is_null() {
+                unsafe {
+                    (*match_info).start = start;
+                    (*match_info).end = end;
+                }
+            }
+            true
+        }
+        _ => false
+    }
+}
+
+#[no_mangle]
+pub extern fn rure_captures_len(captures: *const Captures) -> usize {
+    unsafe { (*captures).0.len() / 2 }
+}
+
+#[no_mangle]
+pub extern fn rure_options_new() -> *mut Options {
+    Box::into_raw(Box::new(Options::default()))
+}
+
+#[no_mangle]
+pub extern fn rure_options_free(options: *mut Options) {
+    unsafe { Box::from_raw(options); }
+}
+
+#[no_mangle]
+pub extern fn rure_options_size_limit(
+    options: *mut Options,
+    limit: usize,
+) {
+    let options = unsafe { &mut *options };
+    options.size_limit = limit;
+}
+
+#[no_mangle]
+pub extern fn rure_options_dfa_size_limit(
+    options: *mut Options,
+    limit: usize,
+) {
+    let options = unsafe { &mut *options };
+    options.dfa_size_limit = limit;
+}
+
+#[no_mangle]
+pub extern fn rure_error_new() -> *mut Error {
+    Box::into_raw(Box::new(Error::new(ErrorKind::None)))
+}
+
+#[no_mangle]
+pub extern fn rure_error_free(err: *mut Error) {
+    unsafe { Box::from_raw(err); }
+}
+
+#[no_mangle]
+pub extern fn rure_error_message(err: *mut Error) -> *const c_char {
+    let err = unsafe { &mut *err };
+    let cmsg = match CString::new(format!("{}", err)) {
+        Ok(msg) => msg,
+        Err(err) => {
+            // I guess this can probably happen if the regex itself has a NUL,
+            // and that NUL re-occurs in the context presented by the error
+            // message. In this case, just show as much as we can.
+            let nul = err.nul_position();
+            let msg = err.into_vec();
+            CString::new(msg[0..nul].to_owned()).unwrap()
+        }
+    };
+    let p = cmsg.as_ptr();
+    err.message = Some(cmsg);
+    p
 }

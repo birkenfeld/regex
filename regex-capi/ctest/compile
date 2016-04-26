@@ -3,7 +3,6 @@
 set -e
 
 cargo build --manifest-path ../Cargo.toml
-gcc -o test test.c \
-  -DDEBUG \
-  -Wall -I../include -L../target/debug \
-  -lutil -ldl -lpthread -lgcc_s -lc -lm -lrt -lutil -lrure
+gcc -o test test.c -DDEBUG -ansi -Wall -I../include -L../target/debug -lrure
+# If you're using librure.a, then you'll need to link other stuff:
+# -lutil -ldl -lpthread -lgcc_s -lc -lm -lrt -lutil -lrure

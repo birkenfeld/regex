@@ -18,15 +18,11 @@ use std::sync::Arc;
 
 use memchr::memchr;
 
-use exec::{Exec, ExecNoSync, ExecBuilder};
+use exec::{Exec, ExecNoSync};
 use expand::expand;
 use error::Error;
+use re_builder::bytes::RegexBuilder;
 use re_trait::{self, RegularExpression, Slot};
-
-pub use set::RegexSetBytes as RegexSet;
-pub use set::SetMatchesBytes as SetMatches;
-pub use set::SetMatchesIterBytes as SetMatchesIterBytes;
-pub use set::SetMatchesIntoIterBytes as SetMatchesIntoIterBytes;
 
 /// A compiled regular expression for matching arbitrary bytes.
 ///
@@ -90,11 +86,7 @@ impl Regex {
     /// If the data structure exceeds the size given, then an error is
     /// returned.
     pub fn with_size_limit(size: usize, re: &str) -> Result<Regex, Error> {
-        ExecBuilder::new(re)
-            .only_utf8(false)
-            .size_limit(size)
-            .build()
-            .map(Regex)
+        RegexBuilder::new(re).size_limit(size).compile()
     }
 
     /// Returns true if and only if the regex matches the string given.

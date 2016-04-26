@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -13,14 +14,13 @@ bool test_is_match() {
     bool passed = true;
     const char *haystack = "snowman: \xE2\x98\x83";
 
-    rure *re = rure_compile_must("(?u)\\p{So}$");
+    rure *re = rure_compile_must("\\p{So}$");
     bool matched = rure_is_match(re, (const uint8_t *)haystack,
                                  strlen(haystack), 0);
     if (!matched) {
         if (DEBUG) {
             fprintf(stderr,
-                    "[test_is_match] expected match, "
-                    "but got no match\n");
+                    "[test_is_match] expected match, but got no match\n");
         }
         passed = false;
     }
@@ -111,6 +111,7 @@ bool test_iter() {
 
     rure *re = rure_compile_must("\\w+(\\w)");
     rure_match match = {0};
+    rure_captures *caps = rure_captures_new(re);
     rure_iter *it = rure_iter_new(re, (const uint8_t *)haystack,
                                   strlen(haystack));
 
@@ -136,7 +137,6 @@ bool test_iter() {
         goto done;
     }
 
-    rure_captures *caps = rure_captures_new(re);
     matched = rure_iter_next_captures(it, caps);
     if (!matched) {
         if (DEBUG) {
@@ -161,6 +161,32 @@ bool test_iter() {
     }
 done:
     rure_iter_free(it);
+    rure_captures_free(caps);
+    rure_free(re);
+    return passed;
+}
+
+/*
+ * This tests whether we can set the flags correctly. In this case, we disable
+ * all flags, which includes disabling Unicode mode. When we disable Unicode
+ * mode, we can match arbitrary possibly invalid UTF-8 bytes, such as \xFF.
+ * (When Unicode mode is enabled, \xFF won't match .)
+ */
+bool test_flags() {
+    bool passed = true;
+    const char *pattern = ".";
+    const char *haystack = "\xFF";
+
+    rure *re = rure_compile((const uint8_t *)pattern, strlen(pattern),
+                            0, NULL, NULL);
+    bool matched = rure_is_match(re, (const uint8_t *)haystack,
+                                 strlen(haystack), 0);
+    if (!matched) {
+        if (DEBUG) {
+            fprintf(stderr, "[test_flags] expected match, but got no match\n");
+        }
+        passed = false;
+    }
     rure_free(re);
     return passed;
 }
@@ -168,7 +194,7 @@ done:
 bool test_compile_error() {
     bool passed = true;
     rure_error *err = rure_error_new();
-    rure *re = rure_compile("(", err);
+    rure *re = rure_compile((const uint8_t *)"(", 1, 0, NULL, err);
     if (re != NULL) {
         if (DEBUG) {
             fprintf(stderr,
@@ -188,32 +214,63 @@ bool test_compile_error() {
         }
         passed = false;
     }
+    rure_error_free(err);
     return passed;
+}
+
+bool test_compile_error_size_limit() {
+    bool passed = true;
+    rure_options *opts = rure_options_new();
+    rure_options_size_limit(opts, 0);
+    rure_error *err = rure_error_new();
+    rure *re = rure_compile((const uint8_t *)"\\w{100}", 8, 0, opts, err);
+    if (re != NULL) {
+        if (DEBUG) {
+            fprintf(stderr,
+                    "[test_compile_error_size_limit] "
+                    "expected NULL regex pointer, but got non-NULL pointer\n");
+        }
+        passed = false;
+        rure_free(re);
+    }
+    const char *msg = rure_error_message(err);
+    if (NULL == strstr(msg, "exceeds size")) {
+        if (DEBUG) {
+            fprintf(stderr,
+                    "[test_compile_error] "
+                    "expected an 'exceeds size' error message, but "
+                    "got this instead: '%s'\n", msg);
+        }
+        passed = false;
+    }
+    rure_options_free(opts);
+    rure_error_free(err);
+    return passed;
+}
+
+void run_test(bool (test)(), const char *name, bool *passed) {
+    if (!test()) {
+        *passed = false;
+        fprintf(stderr, "FAILED: %s\n", name);
+    } else {
+        fprintf(stderr, "PASSED: %s\n", name);
+    }
 }
 
 int main() {
     bool passed = true;
-    if (!test_is_match()) {
-        passed = false;
-        fprintf(stderr, "FAILED: test_is_match\n");
-    }
-    if (!test_find()) {
-        passed = false;
-        fprintf(stderr, "FAILED: test_find\n");
-    }
-    if (!test_captures()) {
-        passed = false;
-        fprintf(stderr, "FAILED: test_captures\n");
-    }
-    if (!test_iter()) {
-        passed = false;
-        fprintf(stderr, "FAILED: test_captures\n");
-    }
-    if (!test_compile_error()) {
-        passed = false;
-        fprintf(stderr, "FAILED: test_compile_error\n");
-    }
+
+    run_test(test_is_match, "test_is_match", &passed);
+    run_test(test_find, "test_find", &passed);
+    run_test(test_captures, "test_captures", &passed);
+    run_test(test_iter, "test_iter", &passed);
+    run_test(test_flags, "test_flags", &passed);
+    run_test(test_compile_error, "test_compile_error", &passed);
+    run_test(test_compile_error_size_limit, "test_compile_error_size_limit",
+             &passed);
+
     if (!passed) {
         exit(1);
     }
+    return 0;
 }
